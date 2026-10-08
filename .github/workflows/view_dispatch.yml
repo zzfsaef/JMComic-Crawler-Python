@@ -1,0 +1,73 @@
+name: 查看JM本子详情 (dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      TEXT:
+        type: string
+        description: '任意文本，从中提取数字作为车号。如 350234、JM350234、https://18comic.vip/album/350234/。注意：文本里的所有数字会被拼接成一个车号。'
+        required: true
+
+      CLIENT_IMPL:
+        type: choice
+        description: '客户端类型（client.impl）。查询失败时，可以换成 html 重试。'
+        required: false
+        options:
+          - 默认
+          - api
+          - html
+
+jobs:
+  view:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # 工作流输入
+      JMV_TEXT: ${{ github.event.inputs.TEXT }}
+      CLIENT_IMPL: ${{ github.event.inputs.CLIENT_IMPL }}
+
+      # 固定值
+      JMV_LOG: /tmp/jmv.log
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装jmcomic（本仓库源码，保证带 jmv 命令）
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./
+
+      - name: 生成可选配置（client.impl）
+        if: ${{ inputs.CLIENT_IMPL != '' && inputs.CLIENT_IMPL != '默认' }}
+        run: |
+          printf 'client:\n  impl: %s\n' "$CLIENT_IMPL" > /tmp/jmv_option.yml
+          echo "使用配置 /tmp/jmv_option.yml:"
+          cat /tmp/jmv_option.yml
+          echo "JM_OPTION_PATH=/tmp/jmv_option.yml" >> "$GITHUB_ENV"
+
+      - name: 查询详情
+        run: |
+          set -o pipefail
+          # PYTHONIOENCODING：jmv 会打印 emoji，stdout 不是终端时必须显式指定 utf-8
+          PYTHONIOENCODING=utf-8 jmv "$JMV_TEXT" -y 2>&1 | tee "$JMV_LOG"
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo '### 🔍 查询结果'
+            echo ''
+            echo '```text'
+            # 去掉 jmcomic 的时间戳日志行，只留详情表格
+            grep -v '^\[[0-9]' "$JMV_LOG" || cat "$JMV_LOG"
+            echo '```'
+            echo ''
+            echo "> 输入：\`$JMV_TEXT\` ｜ 客户端：\`${CLIENT_IMPL:-默认}\` ｜ 运行：${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
